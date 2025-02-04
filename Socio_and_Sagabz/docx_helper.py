@@ -6,7 +6,6 @@ import pandas as pd
 import numpy as np
 from docx import Document
 from docx.shared import Inches
-from docx.shared import Pt
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from matplotlib.figure import Figure
 from tqdm import tqdm
@@ -17,7 +16,7 @@ from docxtpl import DocxTemplate
 from docx.oxml import OxmlElement
 
 ADD_IN_END_OF_SENTENCE: str = "."
-
+IS_SOCIO = True
 
 def text_to_rgba(s, *, dpi, **kwargs):
     # To convert a text string to an image, we can:
@@ -87,12 +86,10 @@ class Docx_helper(ABC):
     def get_columns_names(self):
         pass
 
-    def dehash(self, s: str):
-        return "".join([chr(ord(c) - i % 5) for i, c in enumerate(s)])
 
-    def my_hash(self, s: str):
-        # increase the utf of each char by 1
-        return "".join([chr(ord(c) + i % 5) for i, c in enumerate(s)])
+    def my_hash(self, s):
+        # convert the string number in a deterministic way
+        return abs(hash(s)).__str__()
 
     def sigma_text(self, sigma, category):
         values_small_threshold, values_big_threshold = SIGMAS[category]
@@ -211,7 +208,7 @@ class Docx_helper(ABC):
                     list_of_sentences.append({'name': current_sentence})
 
             if len(list_of_sentences) > 0:
-                class_dict = {'name': f"\u202B {word_name} {rtl_marks}({rtl_marks}{len(list_of_sentences)}{rtl_marks}){rtl_marks} " + ":\u202C"}
+                class_dict = {'name': f"\u202B {word_name} {rtl_marks}){rtl_marks}{len(list_of_sentences)}{rtl_marks}({rtl_marks} " + ":\u202C"}
                 class_dict["bullets"] = list_of_sentences
 
                 context["conserve_classifications"].append(class_dict)
@@ -228,7 +225,7 @@ class Docx_helper(ABC):
                     list_of_sentences.append({'name': current_sentence})
 
             if len(list_of_sentences) > 0:
-                class_dict = {'name': f"\u202B {word_name} {rtl_marks}({rtl_marks}{len(list_of_sentences)}{rtl_marks}){rtl_marks} " + ":\u202C"}
+                class_dict = {'name': f"\u202B {word_name} {rtl_marks}){rtl_marks}{len(list_of_sentences)}{rtl_marks}({rtl_marks} " + ":\u202C"}
                 class_dict["bullets"] = list_of_sentences
 
                 context["improve_classifications"].append(class_dict)
@@ -256,7 +253,6 @@ class Docx_helper(ABC):
             title.text += f" (N={n})"
         title.runs[0] = "David"
         title.runs[0].underline = True
-        title.runs[0].style.font.size = Pt(12)
 
         # add the histograms to the table
         for i in range(len(hists)):
@@ -287,10 +283,41 @@ class Docx_helper(ABC):
         except:
             pass
 
-        doc.save(path_to_save)
 
-        if classification_df is not None:
+        if not IS_SOCIO:
+            try:
+                print(f"adding literals not classifing")
+                # points to conserve and point to improve
+                conserve_cell = doc.tables[0].cell(len(hists) + len(classification_df[:-2]), 1)
+                conserve_title_cell = doc.tables[0].cell(len(hists) + len(classification_df[:-2]), 0)
+                improve_cell = doc.tables[0].cell(len(hists) + len(classification_df[:-2]) + 1, 1)
+                improve_title_cell = doc.tables[0].cell(len(hists) + len(classification_df[:-2]) + 1, 0)
+                conserve_cell.add_paragraph(fix_rtl_symbols("\n\n".join(classification_df[-2].dropna().array)))
+                improve_cell.add_paragraph(fix_rtl_symbols("\n\n".join(classification_df[-1].dropna().array)))
+                conserve_title_cell.add_paragraph(f"(N={len(classification_df[-2].dropna().array)})")
+                improve_title_cell.add_paragraph(f"(N={len(classification_df[-1].dropna().array)})")
+
+                cells = [conserve_cell, conserve_title_cell, improve_cell, improve_title_cell]
+                for cell in cells:
+                    for paragraph in cell.paragraphs:
+                        paragraph.style.font.name = "David"
+                        paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+                for cell in (conserve_title_cell, improve_title_cell):
+                    for paragraph in cell.paragraphs:
+                        paragraph.style.font.name = "David"
+                        paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+            except:
+                print("Error in adding literals to the word file for")
+                print(classification_df)
+
+
+
+            doc.save(path_to_save)
+        elif classification_df is not None:
+            doc.save(path_to_save)
             self.insert_classifications(classification_df, path_to_save)
+        else:
+            doc.save(path_to_save)
 
     def set_paragraph_rtl(self, paragraph):
         # Set paragraph alignment to right
@@ -303,13 +330,14 @@ class Docx_helper(ABC):
         bidi.set(qn('w:val'), '1')
         pPr.append(bidi)
 
-    def create_text_figure(self, avg_personal):
-        val_to_sentence = {1: "נמוך ביחס לממוצע ",
-         2: "מתחת לממוצע",
-         3: "מעט מתחת לממוצע",
-         4: "מעט מעל הממוצע",
-         5: "מעל הממוצע",
-         6: "גבוה ביחס לממוצע"}
+    def create_text_figure(self, avg_personal, std_personal):
+        val_to_sentence = \
+            {1: "נמוך ביחס לממוצע",
+             2: "מתחת לממוצע",
+             3: "מעט מתחת לממוצע",
+             4: "מעט מעל הממוצע",
+             5: "מעל הממוצע",
+             6: "גבוה ביחס לממוצע"}
         fig = plt.figure()
         rgba2 = text_to_rgba(r""+f"{val_to_sentence[round(avg_personal)][::-1]}", color="black", fontsize=15, dpi=200)
         fig.figimage(rgba2, 200, 300)
@@ -322,7 +350,8 @@ class Docx_helper(ABC):
                           old_stats_df=None,
                           verbose: bool = True,
                           start_cadet: str = None,
-                          names_to_hashes: bool = False):
+                          names_to_hashes: bool=False,
+                          is_socio: bool = True):
 
         reached_start_cadet = start_cadet is None
         # create word file for every person
@@ -337,9 +366,15 @@ class Docx_helper(ABC):
             df = df[1]
 
             # TODO - voodoo code to get only numerical columns
-            numerical_columns = df.columns.drop("name")[:-3]  # drop the conserve, improve and good talpion columns
+            if name_to_classification[person_name] is None:
+                num_columns_index = -3
+            elif (name_to_classification[person_name].shape[0]==0):
+                num_columns_index = -2
+            else:
+                num_columns_index = -3
+            numerical_columns = df.columns.drop("name")[:num_columns_index]  # drop the conserve, improve and good talpion columns
             stats_per_person = stats_df[stats_df["name"] == person_name]
-            no_hist_numerical_columns = df.columns.drop("name")[-3:-2]
+            no_hist_numerical_columns = df.columns.drop("name")[num_columns_index:-2]
 
             hists = []
             for category in numerical_columns:
@@ -380,15 +415,23 @@ class Docx_helper(ABC):
             # Add the colums whom we want only the avrage and std to be presented without the histogram
             for category in no_hist_numerical_columns:
                 avg_personal = stats_per_person[stats_per_person["category"] == category]["mean"].values[0]
-                hist = self.create_text_figure(avg_personal)
+                std_personal = stats_per_person[stats_per_person["category"] == category]["std"].values[0]
+                hist = self.create_text_figure(avg_personal, std_personal)
                 hists.append(hist)
 
 
             N = df.shape[0]
-            # print(f"Creating word file for {person_name} (N={N})")
-            df = name_to_classification[person_name] if name_to_classification is not None else None
+            print(f"Creating word file for {person_name} (N={N})")
+            df2 = name_to_classification[person_name] if name_to_classification is not None else None
+            if df2 is not None:
+                if df2.shape[0] == 0 and person_name !="ממוצע":
+                    print(f"Person {person_name} has no classification")
+                    global IS_SOCIO
+                    IS_SOCIO = False
+                    other_literal_columns = df.columns.drop(numerical_columns).drop(no_hist_numerical_columns).drop("name")
+                    df2 = [df[lit_col] for lit_col in other_literal_columns]
 
-            self.create_word_file(hists, df, person_name, n=N, names_to_hashes=names_to_hashes)
+            self.create_word_file(hists, df2, person_name, n=N, names_to_hashes=names_to_hashes)
 
         # save the hash text file to the output directory
         with open(self.word_output_dir + "\\names_to_hashes.txt", "w", encoding="utf-8") as f:
